@@ -9,6 +9,8 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.metrics.pairwise import cosine_similarity as sklearn_cosine
+import torch
+from transformers import AutoTokenizer, AutoModel
 
 
 def build_tfidf(texts):
@@ -16,7 +18,10 @@ def build_tfidf(texts):
 
     Returns (tfidf_matrix, vectorizer).
     """
-    pass
+    # Use TfidfVectorizer to build representations
+    vectorizer = TfidfVectorizer()
+    tfidf_matrix = vectorizer.fit_transform(texts)
+    return tfidf_matrix, vectorizer
 
 
 def compute_tfidf_similarity(tfidf_matrix):
@@ -24,7 +29,8 @@ def compute_tfidf_similarity(tfidf_matrix):
 
     Returns a numpy array of shape (n, n).
     """
-    pass
+    # Compute pairwise cosine similarity matrix
+    return sklearn_cosine(tfidf_matrix)
 
 
 def load_glove(filepath):
@@ -32,7 +38,15 @@ def load_glove(filepath):
 
     Returns a dict mapping each word to a numpy array.
     """
-    pass
+    embeddings = {}
+    # Load GloVe file into a dictionary
+    with open(filepath, 'r', encoding='utf-8') as f:
+        for line in f:
+            parts = line.strip().split()
+            word = parts[0]
+            vector = np.array(parts[1:], dtype=np.float32)
+            embeddings[word] = vector
+    return embeddings
 
 
 def text_to_glove(text, embeddings):
@@ -41,7 +55,17 @@ def text_to_glove(text, embeddings):
     Skip out-of-vocabulary words. If every word is OOV, return a zero
     vector of shape (50,).
     """
-    pass
+    # Split text into lowercase words[cite: 1]
+    words = text.lower().split()
+    # Look up each word and skip OOV words[cite: 1]
+    vectors = [embeddings[w] for w in words if w in embeddings]
+    
+    if not vectors:
+        # Return zero vector if all words are OOV[cite: 1]
+        return np.zeros(50)
+    
+    # Return the average of all found word vectors[cite: 1]
+    return np.mean(vectors, axis=0)
 
 
 def extract_bert_embedding(text, tokenizer, model):
@@ -49,27 +73,82 @@ def extract_bert_embedding(text, tokenizer, model):
 
     Returns a numpy array of shape (768,).
     """
-    pass
+    import torch
+    # Tokenize with truncation and max_length[cite: 1]
+    inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512, padding=True)
+    
+    # Run forward pass without gradients[cite: 1]
+    with torch.no_grad():
+        outputs = model(**inputs)
+    
+    # Extract last_hidden_state[cite: 1]
+    last_hidden_state = outputs.last_hidden_state  # [batch_size, seq_len, 768]
+    
+    # Apply mean pooling accounting for the attention mask[cite: 1]
+    attention_mask = inputs['attention_mask']
+    mask = attention_mask.unsqueeze(-1).expand(last_hidden_state.size()).float()
+    sum_embeddings = torch.sum(last_hidden_state * mask, 1)
+    sum_mask = torch.clamp(mask.sum(1), min=1e-9)
+    mean_pooled = sum_embeddings / sum_mask
+    
+    return mean_pooled.squeeze().numpy()
 
 
-def compare_similarities(texts, queries, tfidf_sim, glove_embeddings,
+def compare_similarities(texts, queries, tfidf_sim, glove_dict,
                          bert_model, bert_tokenizer):
     """Compare similarity rankings across TF-IDF, GloVe, and BERT.
-
-    For each query, find the top-3 most similar texts under each method,
-    excluding the query itself. Return:
-
-        {query_text: {"tfidf": [(text, score), ...],
-                      "glove": [(text, score), ...],
-                      "bert":  [(text, score), ...]}}
     """
-    pass
+    # Identify indices of query texts in the full corpus to reuse tfidf_sim
+    text_to_idx = {text: i for i, text in enumerate(texts)}
+    
+    # Pre-calculate GloVe and BERT embeddings for the whole corpus
+    glove_corpus = np.array([text_to_glove(t, glove_dict) for t in texts])
+    
+    # Pre-calculating BERT embeddings for all texts (this may take a moment)
+    bert_corpus = []
+    for t in texts:
+        bert_corpus.append(extract_bert_embedding(t, bert_tokenizer, bert_model))
+    bert_corpus = np.array(bert_corpus)
+
+    comparison_results = {}
+
+    for query_text in queries:
+        query_results = {}
+        
+        # 1. TF-IDF Top-3
+        q_idx = text_to_idx[query_text]
+        tfidf_scores = tfidf_sim[q_idx]
+        query_results["tfidf"] = get_top_n(texts, tfidf_scores, query_text)
+
+        # 2. GloVe Top-3
+        query_glove = text_to_glove(query_text, glove_dict).reshape(1, -1)
+        glove_scores = sklearn_cosine(query_glove, glove_corpus).flatten()
+        query_results["glove"] = get_top_n(texts, glove_scores, query_text)
+
+        # 3. BERT Top-3
+        query_bert = extract_bert_embedding(query_text, bert_tokenizer, bert_model).reshape(1, -1)
+        bert_scores = sklearn_cosine(query_bert, bert_corpus).flatten()
+        query_results["bert"] = get_top_n(texts, bert_scores, query_text)
+
+        comparison_results[query_text] = query_results
+
+    return comparison_results
+
+
+def get_top_n(texts, scores, query_text, n=3):
+    """Helper function to get top-n similar texts excluding the query."""
+    indices = np.argsort(scores)[::-1]
+    results = []
+    for idx in indices:
+        if texts[idx] != query_text:
+            results.append((texts[idx], float(scores[idx])))
+        if len(results) == n:
+            break
+    return results
 
 
 if __name__ == "__main__":
-    import torch
-    from transformers import AutoTokenizer, AutoModel
-
+    
     # Load data
     df = pd.read_csv("data/bbc_news.csv")
     texts = df["text"].tolist()
@@ -100,9 +179,7 @@ if __name__ == "__main__":
     if sample_bert is not None:
         print(f"Sample BERT embedding shape: {sample_bert.shape}")
 
-    # Task 4: Compare — pick one query per category so the cross-method
-    # ranking comparison is not degenerate (the CSV is sorted by category,
-    # so texts[:5] would all be from the same one).
+    # Task 4: Compare
     if result and glove and tfidf_sim is not None:
         queries = [df[df["category"] == cat]["text"].iloc[0]
                    for cat in df["category"].unique()]
@@ -110,7 +187,7 @@ if __name__ == "__main__":
             texts, queries, tfidf_sim, glove, model, tokenizer
         )
         if comparison:
-            for q in list(comparison.keys())[:2]:
+            for q in list(comparison.keys())[:5]: # Showing all 5 categories
                 print(f"\nQuery: {q[:80]}...")
                 for method in ["tfidf", "glove", "bert"]:
                     top = comparison[q].get(method, [])
