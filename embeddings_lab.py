@@ -20,6 +20,7 @@ def build_tfidf(texts):
     """
     # Use TfidfVectorizer to build representations
     vectorizer = TfidfVectorizer()
+    
     tfidf_matrix = vectorizer.fit_transform(texts)
     return tfidf_matrix, vectorizer
 
@@ -27,7 +28,6 @@ def build_tfidf(texts):
 def compute_tfidf_similarity(tfidf_matrix):
     """Compute pairwise cosine similarity from a TF-IDF matrix.
 
-    Returns a numpy array of shape (n, n).
     """
     # Compute pairwise cosine similarity matrix
     return sklearn_cosine(tfidf_matrix)
@@ -36,7 +36,6 @@ def compute_tfidf_similarity(tfidf_matrix):
 def load_glove(filepath):
     """Load pre-trained GloVe vectors from a text file.
 
-    Returns a dict mapping each word to a numpy array.
     """
     embeddings = {}
     # Load GloVe file into a dictionary
@@ -50,11 +49,7 @@ def load_glove(filepath):
 
 
 def text_to_glove(text, embeddings):
-    """Compute the average GloVe embedding for a text.
-
-    Skip out-of-vocabulary words. If every word is OOV, return a zero
-    vector of shape (50,).
-    """
+    """Compute the average GloVe embedding for a text.    """
     # Split text into lowercase words[cite: 1]
     words = text.lower().split()
     # Look up each word and skip OOV words[cite: 1]
@@ -69,10 +64,7 @@ def text_to_glove(text, embeddings):
 
 
 def extract_bert_embedding(text, tokenizer, model):
-    """Extract a sentence embedding from DistilBERT.
-
-    Returns a numpy array of shape (768,).
-    """
+    """Extract a sentence embedding from DistilBERT. """
     import torch
     # Tokenize with truncation and max_length[cite: 1]
     inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=512, padding=True)
